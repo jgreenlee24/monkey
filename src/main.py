@@ -40,9 +40,12 @@ def main():
 
     # get all post IDs where campaign reporting_end_date is invalid:
     posts = posts_cnx.execute("SELECT * FROM posts WHERE reporting_end_time LIKE '%0001%';")
-    result = map(lambda p: p['id'], posts) 
+    if len(posts) == 0:
+      print('no posts found')
+      return
 
     # get the campaigns for these posts by joining w/ obligations
+    result = map(lambda p: p['id'], posts) 
     post_ids = ','.join('"{0}"'.format(w) for w in list(result))
     query = """
       SELECT campaigns.*, obligations.post_id as post_id 
@@ -57,32 +60,10 @@ def main():
     for c in campaigns:
       values[c['post_id']] = (c['end_date'] + d).strftime("%Y-%m-%d %H:%M:%S")
 
-    vals = [(k, v) for k, v in values.items()] 
-    vals = ','.join('{0}'.format(w) for w in list(vals))
+    vals = [(v, k) for k, v in values.items()] 
+    posts_cnx.executemany("UPDATE posts SET reporting_end_time = %s WHERE id = %s", vals)
 
-    query = """
-      INSERT INTO posts (id, reporting_end_time)
-      VALUES {}
-      ON DUPLICATE KEY UPDATE
-      id=VALUES(id), reporting_end_time=VALUES(reporting_end_time)
-    """.format(vals).replace('\n','').replace('\t','')
-
-    print(query)
-    posts_cnx.execute(query)
-
-    # get the campaigns for these posts by joining w/ obligations
-    # and set the reporting_end_date to match the campaign start_date + 6 weeks
-    # query = """
-    #   UPDATE campaigns as dest,
-    #   ( SELECT campaigns.* FROM obligations JOIN campaigns ON campaigns.id = obligations.campaign_id WHERE obligations.post_id IN ({}) ) as src
-    #   SET dest.reporting_end_date = DATE_ADD(src.end_date, INTERVAL 6 WEEK)
-    #   WHERE dest.id = src.id;
-    # """.format(post_ids)
-    
-    # print(query)
-    # collabs_cnx.execute(query)
-
-    print('successfully updated campaigns')
+    print('successfully updated posts')
 
   except Exception as error:
     print('error in main loop {}'.format(error))
