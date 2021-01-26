@@ -17,7 +17,7 @@ COLLABS_SERVICE_MYSQL_HOST = os.environ.get('COLLABS_SERVICE_MYSQL_HOST', None)
 COLLABS_SERVICE_MYSQL_PORT = os.environ.get('COLLABS_SERVICE_MYSQL_PORT', None)
 COLLABS_SERVICE_MYSQL_USER = os.environ.get('COLLABS_SERVICE_MYSQL_USER', None)
 COLLABS_SERVICE_MYSQL_PASSWORD = os.environ.get('COLLABS_SERVICE_MYSQL_PASSWORD', None)
-QUEUE_NAME = os.environ.get('QUEUE_NAME', 'rs-post-service.fifo')
+AWS_DEFAULT_REGION = os.environ.get('AWS_DEFAULT_REGION', "us-east-1")
 ENV = os.environ.get('ENV', 'dev')
 
 # Database connection config
@@ -34,12 +34,56 @@ DB_CONFIG = {
 LOGGER = logging.getLogger(__name__)
 LOGGER.setLevel(logging.DEBUG)
 
-class CollabsConector():
-  def __init__(self, cfg):
+class CollabsConnector():
+  def __init__(self, cfg=None):
     # cfg = load_ssm_config()
     self.connect_collabs_db(cfg)
     super().__init__()
 
+  def execute(self, query, data=None):
+    """
+    Executes a given query against the collaborations database.
+    Arguments:
+      query (string) -- SQL template string to execute
+      data ()
+    Returns:
+      result (list of tuples)
+    """
+    try:
+      with self.cnx.cursor() as cursor:
+        if data is not None:
+          cursor.execute(query, data)
+        else:
+          cursor.execute(query)
+        result = cursor.fetchall()
+        if result is None:
+          raise Exception('not found')
+        return result
+    except Exception as err:
+      LOGGER.error('running query {}'.format(query), exc_info=True)
+      raise err
+
+  def update_campaign_reporting_dates(self, campaign_ids, data):
+    """
+    Given an array of campaign IDs, update the campaign reporting start date to match the campaign start date
+    and update the campaign reporting end date to match the campaign start date + 6 weeks.
+    Arguments:
+      campaign_ids (string) -- List of unique identifiers for campaigns
+      data ()
+    Returns:
+      result (list of tuples)
+    """
+    try:
+      with self.cnx.cursor() as cursor:
+        sql = "UPDATE reporting_start_time, reporting_end_time where campaign_id in %s VALUES (%s, %s);;"
+        cursor.execute(sql, campaign_ids)
+        result = cursor.fetchall()
+        if result is None:
+          raise Exception('not found')
+        return result
+    except Exception as err:
+      LOGGER.error('updating campaigns {}'.format(campaign_ids), exc_info=True)
+      raise err
 
   def get_advertiser_ids(self, brand_id):
     """
@@ -159,7 +203,16 @@ class CollabsConector():
     Returns:
       self {[pymsql.Connection]} -- A pymsql.Connection pool
     """
-    if env_vars_provided():
+    if cfg is not None:
+      try:
+        cnx = cnx_from_config(cfg)
+        LOGGER.debug("db connection details: {}".format(cnx))
+        self.cnx = pymysql.connect(**cnx)
+        return self.cnx
+      except Exception as err:
+        LOGGER.error('failed to connect to collaborations database: {}'.format(err))
+        raise err
+    elif env_vars_provided():
       try:
         LOGGER.debug("db connection details: {}".format(DB_CONFIG))
         self = pymysql.connect(**DB_CONFIG)
@@ -167,16 +220,24 @@ class CollabsConector():
       except Exception as err:
         LOGGER.error('failed to connect to collaborations database: {}'.format(err))
         raise err
-    elif cfg is not None:
-      try:
-        LOGGER.debug("db connection details: {}".format(cfg))
-        self.cnx = pymysql.connect(**cfg)
-        return self.cnx
-      except Exception as err:
-        LOGGER.error('failed to connect to collaborations database: {}'.format(err))
-        raise err
     else:
       raise Exception("Missing required environment variables")
+
+def cnx_from_config(cfg):
+  """Connections from Configuration
+  Args:
+      cfg ([Map]): parsed JSON from file
+  Returns:
+      [type]: [description]
+  """
+  return {
+    'host': cfg['COLLABS_SERVICE_MYSQL_HOST'],
+    'user': cfg['COLLABS_SERVICE_MYSQL_USER'],
+    'password': cfg['COLLABS_SERVICE_MYSQL_PASSWORD'],
+    'db': cfg['COLLABS_DB_NAME'],
+    'charset': 'utf8mb4',
+    'cursorclass': pymysql.cursors.DictCursor
+  }
 
 def env_vars_provided():
   """env_vars_provided
