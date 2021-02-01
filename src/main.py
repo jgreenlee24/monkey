@@ -41,7 +41,8 @@ def main():
 
     # run jobs
     # fix_reporting_dates_0001(collabs_cnx, posts_cnx)
-    fix_reporting_dates_null(collabs_cnx, posts_cnx)
+    # fix_reporting_dates_null(collabs_cnx, posts_cnx)
+    fix_posts_without_obligations_by_url(collabs_cnx, posts_cnx)
 
   except Exception as error:
     print('error in main loop {}'.format(error))
@@ -100,6 +101,48 @@ def fix_reporting_dates_null(collabs_cnx, posts_cnx):
 
   print('successfully updated posts where reporting times are NULL')
 
+def fix_posts_without_obligations_by_url(collabs_cnx, posts_cnx):
+  """
+  Fix obligations with null post IDs by JOINING the obligations table on obligation_submission_url
+  """
+  # get obligations where post ID is null
+  obligations = collabs_cnx.execute("""
+    SELECT * FROM `collaborations`.`obligations`
+    WHERE (`is_deleted` = '0') AND (`post_id` IS NULL) 
+    AND (`date_submitted` > '2020-11-29 22:21:22') 
+    AND (`obligation_submission_url` IS NOT NULL) 
+    AND (`obligation_type_id` = '9') ORDER BY `id`
+  """.replace('\n','').replace('\t',''))
+  if len(obligations) == 0:
+    print('no obligations found where post_id is NULL')
+    return
+
+  print('obligations count: ' + str(len(obligations)))
+
+  result = map(lambda o: o['obligation_submission_url'], obligations)
+  urls = ','.join('"{0}"'.format(w) for w in list(result))
+
+  # get the posts by JOINING the posts table on obligation_submission_url
+  post_ids = ','.join('"{0}"'.format(w) for w in list(urls))
+  query = """
+    SELECT * FROM posts
+    WHERE posts.submitted_url IN ({})
+    ORDER BY posts.modified_at
+  """.format(urls).replace('\n','').replace('\t','')
+
+  posts = posts_cnx.execute(query)
+  print('posts count: ' + str(len(posts)))
+
+  values = {}  
+  for p in posts:
+    values[p['id']] = next((x['id'] for x in obligations if x['obligation_submission_url'] == p['submitted_url']))
+    # values[p['id']] = next((x['obligation_submission_url'] for x in obligations if x['obligation_submission_url'] == p['submitted_url']))
+  vals = [(k, v) for k, v in values.items()] 
+  print(vals)
+
+  collabs_cnx.executemany("UPDATE obligations SET post_id = %s WHERE id = %s", vals)
+  print('successfully updated obligations where post_id is NULL')
+
 def fix_reporting_dates_0001(collabs_cnx, posts_cnx):
   """
   Fix posts where reporting_end_time like %0001%.
@@ -112,6 +155,8 @@ def fix_reporting_dates_0001(collabs_cnx, posts_cnx):
     print('no posts found where reporting_end_time like 0001')
     return
 
+  print('posts count: ' + str(len(posts)))
+
   # get the campaigns for these posts by joining w/ obligations
   result = map(lambda p: p['id'], posts) 
   post_ids = ','.join('"{0}"'.format(w) for w in list(result))
@@ -120,16 +165,23 @@ def fix_reporting_dates_0001(collabs_cnx, posts_cnx):
     FROM obligations JOIN campaigns ON campaigns.id = obligations.campaign_id 
     WHERE obligations.post_id IN ({})
   """.format(post_ids).replace('\n','').replace('\t','')
-  campaigns = collabs_cnx.execute(query)
+  obligations = collabs_cnx.execute(query)
+
+  print('obligations count: ' + str(len(obligations)))
+  
+  # check to see which posts are not tied to obligations
+  obl_post_ids = map(lambda o: o['post_id'], obligations)
+  obl_post_ids = ','.join('"{0}"'.format(w) for w in list(obl_post_ids))
+  print(diff(obl_post_ids.split(','), post_ids.split(',')))
 
   # update the posts' reporting_end_time
   values = {}
   d = timedelta(weeks=6)
-  for c in campaigns:
+  for c in obligations:
     values[c['post_id']] = (c['end_date'] + d).strftime("%Y-%m-%d %H:%M:%S")
 
   vals = [(v, k) for k, v in values.items()] 
-  posts_cnx.executemany("UPDATE posts SET reporting_end_time = %s WHERE id = %s", vals)
+  # posts_cnx.executemany("UPDATE posts SET reporting_end_time = %s WHERE id = %s", vals)
 
   print('successfully updated posts where reporting_end_time like 0001')
 

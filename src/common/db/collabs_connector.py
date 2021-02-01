@@ -63,6 +63,29 @@ class CollabsConnector():
       LOGGER.error('running query {}'.format(query), exc_info=True)
       raise err
 
+  def executemany(self, query, data=None):
+    """
+    Executes a given query for a list of values against the posts database.
+    https://dev.mysql.com/doc/connector-python/en/connector-python-api-mysqlcursor-executemany.html
+    Arguments:
+      query (string) -- SQL template string to execute
+      data ()
+    Returns:
+      result (list of tuples)
+    """
+    cursor = self.cnx.cursor()
+    try:
+      if data is not None:
+        cursor.executemany(query, data)
+        self.cnx.commit()
+      else:
+        cursor.executemany(query)
+        self.cnx.commit()
+    except Exception as err:
+      self.cnx.rollback()
+      LOGGER.error('running query {}'.format(query), exc_info=True)
+      raise err
+
   def update_campaign_reporting_dates(self, campaign_ids, data):
     """
     Given an array of campaign IDs, update the campaign reporting start date to match the campaign start date

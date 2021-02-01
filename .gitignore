@@ -2,6 +2,8 @@
 local_dev.sh
 local_dev.json
 .vscode/
+config/*
+data/
 
 # test files
 .pytest*/
